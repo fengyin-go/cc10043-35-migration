@@ -74,8 +74,13 @@
       <form class="modal" @submit.prevent="submitCreate">
         <h3>登记{{ meta.entity }}</h3>
         <label v-for="field in meta.fields" :key="field" class="create-field">
-          <span>{{ field }}</span>
-          <input v-model="createValues[field]" :data-testid="`create-${field}`" required />
+          <span>{{ field }}{{ optionalFields.includes(field) ? '（留空自动生成）' : '' }}</span>
+          <input
+            v-model="createValues[field]"
+            :data-testid="`create-${field}`"
+            :placeholder="fieldHints[field] ?? ''"
+            :required="!optionalFields.includes(field)"
+          />
         </label>
         <div class="page-actions">
           <button class="btn" type="button" @click="showCreate = false">取消</button>
@@ -115,6 +120,17 @@ const filterFields = meta.fields.slice(0, 3)
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+// 检查点创建时间已迁移为带时区字段：留空由服务端生成带时区的当前时刻；
+// 手工填写时提示使用带偏移的 ISO-8601，避免再次写入无时区的坏历史值。
+const optionalFields = computed<string[]>(() =>
+  props.moduleKey === 'record_checkpoint' ? ['创建时间'] : [])
+const fieldHints = computed<Record<string, string>>(() => {
+  const hints: Record<string, string> = {}
+  if (props.moduleKey === 'record_checkpoint') {
+    hints['创建时间'] = '留空自动生成；或填带偏移时间，如 2026-11-23T20:00:00+08:00'
+  }
+  return hints
+})
 const stats = computed(() => [
   { label: meta.metrics[0], value: total.value },
   { label: meta.metrics[1], value: rows.value.filter((row) => row.status === meta.statuses[1]).length },
@@ -154,7 +170,10 @@ async function submitCreate() {
   creating.value = true
   errorMessage.value = ''
   try {
-    const result = await createEntry(meta.key, createValues.value)
+    const values = Object.fromEntries(
+      Object.entries(createValues.value).filter(([, value]) => value.trim() !== ''),
+    )
+    const result = await createEntry(meta.key, values)
     if (!result.ok) throw new Error(result.message)
     showCreate.value = false
     await reload()

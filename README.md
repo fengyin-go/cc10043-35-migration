@@ -79,5 +79,35 @@ npm run dev
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
 
+## 记录检查点时间字段迁移
+
+`record_checkpoint` 的历史「创建时间」是混有纯日期（`2026-10-24`）、带偏移 ISO
+时间（`2026-10-25T10:00:00+08:00`）和坏历史值的文本字段。迁移设计在
+`backend/app/services/checkpoint_time.py`（领域时间模型）与
+`checkpoint_migration.py`（迁移协调器）：
+
+- 新增结构化字段，原始文本「创建时间」始终保留，可随时回滚：
+  - `迁移创建时刻`：UTC 带时区时刻；日粒度为当日零点锚点
+  - `时间精度`：`instant`（带时区时刻）/ `day`（只有日期，时刻未知，不提升精度）
+  - `时区偏移`：原始偏移，如 `+08:00`
+  - `迁移状态`：`pending` / `migrated` / `quarantined`
+- 三种读法（`POST /api/record-checkpoint-migration/read-mode`）：
+  `legacy` 回滚只认原始文本；`mixed` 已回填用迁移字段、未回填回退原文（默认）；
+  `migrated` 只认迁移字段。
+- 新值按实际时刻比较；同一自然日的 instant/day 先后不可判定时显式返回
+  `same_day_unknown`，绝不把日期当成零点。
+- 无法解读的值（含无时区裸时间）进 `checkpoint_time_quarantine` 隔离区核查，
+  不参与续采与清退。
+- 30 天清退与续采资格共用同一基准时刻（`reference-now`，默认当前 UTC）；
+  日粒度记录的自然日横跨 30 天边界时转人工复核（`review`），不自动清退。
+- 清退扫描按 ID 游标分批、可中断续扫（`expiry-scan` / `expiry-scan/reset`）。
+
+迁移专用接口前缀 `/api/record-checkpoint-migration`：`progress`、`backfill`、
+`backfill-all`、`quarantine`、`raw-values`（迁移前原始值兼容查询）、`read-mode`、
+`reference-now`、`available-points`、`resume-eligibility`、`latest-explained`、
+`expiry-scan`、`points/{id}`、`chain/{id}`，每个判断都返回选用字段、读法、精度与
+原因明细。单元测试在 `backend/tests/`（`python -m unittest discover -s tests`），
+端到端核对脚本在 `verify/verify_migration.py`。
+
 领域：数据工程
 子方向：数据采集、爬虫与RPA
